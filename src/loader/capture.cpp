@@ -12,6 +12,8 @@
 #include <rbase/inc/winchar.h>
 #include <rdebug/inc/rdebug.h>
 
+#include <future>
+
 #include <type_traits>
 
 #if RTM_PLATFORM_WINDOWS && RTM_COMPILER_MSVC
@@ -1192,65 +1194,86 @@ void Capture::buildAnalyzeData(uintptr_t _symResolver)
 	RTM_ASSERT(_symResolver != 0, "Invalid symbol resolver!");
 
 	// get stack traces unique IDs
-	rtm_vector<StackTrace*>::iterator it  = m_stackTraces.begin();
-	rtm_vector<StackTrace*>::iterator end = m_stackTraces.end();
-
 	const uint32_t numStackTraces = (uint32_t)m_stackTraces.size();
 	uint32_t nextProgressPoint = 0;
-	uint32_t numOpsOver100 = numStackTraces/100;
-	uint32_t idx = 0;
+	uint32_t numOps = numStackTraces;
+	uint32_t numOpsOver100 = numOps / 100;
 
-	while (it != end)
+	std::atomic<uint32_t> idx = 0;
+
+	std::map<uint64_t, uint64_t> resolvedAddressMap;
+
+	auto task = std::async(std::launch::async,
+		[this, _symResolver, &idx, &resolvedAddressMap]()
 	{
-		if ((idx > nextProgressPoint) && m_loadProgressCallback)
+		rtm_vector<StackTrace*>::iterator it = m_stackTraces.begin();
+		rtm_vector<StackTrace*>::iterator end = m_stackTraces.end();
+
+		while (it != end)
 		{
-			nextProgressPoint += numOpsOver100;
-			float percent = float(idx) / float(numOpsOver100);
+			StackTrace* st = *it;
+
+			int numFrames = (int)st->m_numEntries;
+
+			bool countSkippable = true;
+			int skip = 0;
+
+			for (int i = 0; i < numFrames; ++i)
+			{
+				bool currentSymbolInMTunerDLL = true;
+
+				uint64_t currentAddress = st->m_entries[i];
+				if (resolvedAddressMap.find(currentAddress) != resolvedAddressMap.end())
+				{
+					st->m_entries[i + numFrames] = resolvedAddressMap.at(currentAddress);
+				}
+				else
+				{
+					uint64_t newAddress = rdebug::symbolResolverGetAddressID(_symResolver, currentAddress, &currentSymbolInMTunerDLL);
+					st->m_entries[i + numFrames] = newAddress;
+					resolvedAddressMap[currentAddress] = newAddress;
+				}				
+
+				if (!currentSymbolInMTunerDLL)
+					countSkippable = false;
+
+				if (countSkippable)
+					++skip;
+			}
+
+			// remove mtunerdll from the top of call stack
+			if (skip)
+			{
+				const uint32_t newCount = numFrames > skip ? numFrames - skip : 1;
+				for (uint32_t i = 0; i < newCount; ++i)
+					st->m_entries[i] = st->m_entries[i + skip];
+
+				for (uint32_t i = 0; i < newCount; ++i)
+					st->m_entries[i + newCount] = st->m_entries[i + numFrames + skip];
+
+				st->m_numEntries = newCount;
+			}
+
+			memset(&st->m_entries[st->m_numEntries * 2], 0xff, st->m_numEntries * 2 * sizeof(uint64_t));
+
+			st->m_addedToTree[StackTrace::Global] = 0;
+			++it;
+			++idx;
+		}
+	});
+
+	while (!task._Is_ready())
+	{
+		if (m_loadProgressCallback)
+		{
+			float percent = (float(idx) / float(numOps)) * 100.f;
 			m_loadProgressCallback(m_loadProgressCustomData, percent, "Generating unique symbol IDs...");
 		}
-
-		StackTrace* st = *it;
-		
-		int numFrames = (int)st->m_numEntries;
-
-		bool countSkippable = true;
-		int skip = 0;
-
-		for (int i=0; i<numFrames; ++i)
-		{
-			bool currentSymbolInMTunerDLL = true;
-			st->m_entries[i + numFrames] = rdebug::symbolResolverGetAddressID(_symResolver, st->m_entries[i], &currentSymbolInMTunerDLL);
-
-			if (!currentSymbolInMTunerDLL)
-				countSkippable = false;
-
-			if (countSkippable)
-				++skip;
-		}
-
-		// remove mtunerdll from the top of call stack
-		if (skip)
-		{
-			const uint32_t newCount = numFrames > skip ? numFrames - skip : 1;
-			for (uint32_t i=0; i<newCount; ++i)
-				st->m_entries[i]			= st->m_entries[i + skip];
-
-			for (uint32_t i=0; i<newCount; ++i)
-				st->m_entries[i + newCount]	= st->m_entries[i + numFrames + skip];
-
-			st->m_numEntries = newCount;
-		}
-
-		memset(&st->m_entries[st->m_numEntries*2], 0xff, st->m_numEntries*2*sizeof(uint64_t));
-
-		st->m_addedToTree[StackTrace::Global] = 0;
-		++it;
-		++idx;
 	}
 
 	MemoryTagTree* prevTag = NULL;
 
-	const uint32_t numOps = (uint32_t)m_operations.size();
+	numOps = (uint32_t)m_operations.size();
 	nextProgressPoint = 0;
 	numOpsOver100 = numOps/100;
 
