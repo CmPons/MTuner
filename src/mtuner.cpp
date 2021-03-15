@@ -916,6 +916,13 @@ void MTuner::openFileFromPath(const QString& _file)
 				msgInfo.exec();
 			}
 
+			if (res == rtm::Capture::LoadPartialGlobalStats)
+			{
+				QMessageBox msgInfo(QMessageBox::Information, tr("Warning!"), tr("Global stats for the histogram and overall usage failed validation!\nThe data may be invalid!"), QMessageBox::Ok);
+				msgInfo.setWindowIcon(this->windowIcon());
+				msgInfo.exec();
+			}
+
 			// if not a windows toolchain - locate the executable
 			setupLoaderToolchain(ctx, _file, m_gccSetup, m_fileDialog, this, symStore);
 

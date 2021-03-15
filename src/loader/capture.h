@@ -98,7 +98,8 @@ class Capture
 		{
 			LoadSuccess,
 			LoadFail,
-			LoadPartial
+			LoadPartial,
+			LoadPartialGlobalStats
 		};
 
 		Capture();

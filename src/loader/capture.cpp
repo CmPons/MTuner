@@ -925,11 +925,7 @@ Capture::LoadResult Capture::loadBin(const char* _path)
 
 	if (!verifyGlobalStats())
 	{
-		if (m_loadProgressCallback)
-			m_loadProgressCallback(m_loadProgressCustomData, 100.0f, "Invalid data in .MTuner file!");
-
-		clearData();
-		return Capture::LoadFail;
+		return Capture::LoadPartialGlobalStats;
 	}
 
 	return loadResult;
@@ -1201,10 +1197,8 @@ void Capture::buildAnalyzeData(uintptr_t _symResolver)
 
 	std::atomic<uint32_t> idx = 0;
 
-	std::map<uint64_t, uint64_t> resolvedAddressMap;
-
 	auto task = std::async(std::launch::async,
-		[this, _symResolver, &idx, &resolvedAddressMap]()
+		[this, _symResolver, &idx]()
 	{
 		rtm_vector<StackTrace*>::iterator it = m_stackTraces.begin();
 		rtm_vector<StackTrace*>::iterator end = m_stackTraces.end();
@@ -1222,17 +1216,7 @@ void Capture::buildAnalyzeData(uintptr_t _symResolver)
 			{
 				bool currentSymbolInMTunerDLL = true;
 
-				uint64_t currentAddress = st->m_entries[i];
-				if (resolvedAddressMap.find(currentAddress) != resolvedAddressMap.end())
-				{
-					st->m_entries[i + numFrames] = resolvedAddressMap.at(currentAddress);
-				}
-				else
-				{
-					uint64_t newAddress = rdebug::symbolResolverGetAddressID(_symResolver, currentAddress, &currentSymbolInMTunerDLL);
-					st->m_entries[i + numFrames] = newAddress;
-					resolvedAddressMap[currentAddress] = newAddress;
-				}				
+				st->m_entries[i + numFrames] = rdebug::symbolResolverGetAddressID(_symResolver, st->m_entries[i], &currentSymbolInMTunerDLL);
 
 				if (!currentSymbolInMTunerDLL)
 					countSkippable = false;
